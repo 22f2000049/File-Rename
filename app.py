@@ -1,93 +1,53 @@
 import pandas as pd
 import streamlit as st
 import os
+from io import BytesIO
+import zipfile
 
-# App Title
-st.title("File Renaming Tool")
+st.set_page_config(page_title="File Renamer & Zipper", layout="centered")
+st.title("📁 Local File Renamer & ZIP Downloader")
 
-# Step 1: Select File Type
-st.header("Step 1: Select File Type")
-file_type = st.selectbox(
-    "Select the file type:",
-    options=["IES", "PDF", "GOS", "PNG", "All Files"]  # PNG added
-)
+# Step 1: Upload multiple files
+st.header("Step 1: Upload Your Files")
+uploaded_files = st.file_uploader("Select multiple files", type=None, accept_multiple_files=True)
 
-# Step 2: Provide a template download link
-st.header("Step 2: Download Template")
+# Step 2: Upload CSV mapping
+st.header("Step 2: Upload Rename Mapping (CSV)")
+csv_file = st.file_uploader("Upload CSV with 'Old File Name' and 'New File Name'", type=["csv"])
 
-# Dynamically create the template based on file type selection
-def create_template(file_type):
-    if file_type == "All Files":
-        example_old_file = "Example_Old_File"
-        example_new_file = "Example_New_File"
-    else:
-        extension = file_type.upper()
-        example_old_file = f"Example_Old_File.{extension}"
-        example_new_file = f"Example_New_File.{extension}"
-    return {
-        "Old File Name": [example_old_file],
-        "New File Name": [example_new_file]
-    }
-
-template_data = create_template(file_type)
-df_template = pd.DataFrame(template_data)
-template_file_name = f"File_Renaming_Template_{file_type.replace(' ', '_').upper()}.csv"
-df_template.to_csv(template_file_name, index=False)
-
-with open(template_file_name, "rb") as file:
-    st.download_button(
-        label=f"Download Template for {file_type}", 
-        data=file, 
-        file_name=template_file_name, 
-        mime="text/csv"
-    )
-
-# Step 3: Upload folder path and CSV file
-st.header("Step 3: Upload Folder Path and CSV File")
-
-folder_path = st.text_input("Enter the folder path where the files are located:")
-uploaded_file = st.file_uploader("Upload the CSV file with renaming details", type=["csv"])
-
-# Step 4: Process the file renaming
-if st.button("Rename Files"):
-    if not folder_path or not uploaded_file:
-        st.error("Please provide both the folder path and the CSV file.")
-    elif not os.path.isdir(folder_path):
-        st.error("The specified folder path does not exist.")
+# Step 3: Rename and generate zip
+if st.button("Rename and Download ZIP"):
+    if not uploaded_files or not csv_file:
+        st.error("Please upload both files and the CSV.")
     else:
         try:
-            # Read the CSV file
-            renaming_data = pd.read_csv(uploaded_file)
-            if "Old File Name" not in renaming_data.columns or "New File Name" not in renaming_data.columns:
-                st.error("Invalid template format. Ensure it contains 'Old File Name' and 'New File Name' columns.")
+            df = pd.read_csv(csv_file)
+            if "Old File Name" not in df.columns or "New File Name" not in df.columns:
+                st.error("CSV must contain 'Old File Name' and 'New File Name' columns.")
             else:
-                renamed, skipped, failed = 0, 0, 0
+                rename_map = dict(zip(df["Old File Name"].str.strip(), df["New File Name"].str.strip()))
+                memory_zip = BytesIO()
 
-                for index, row in renaming_data.iterrows():
-                    old_name = str(row["Old File Name"]).strip()
-                    new_name = str(row["New File Name"]).strip()
+                with zipfile.ZipFile(memory_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
+                    renamed, skipped = 0, 0
+                    for file in uploaded_files:
+                        original_name = file.name.strip()
+                        if original_name in rename_map:
+                            new_name = rename_map[original_name]
+                            zipf.writestr(new_name, file.read())
+                            st.success(f"Renamed: {original_name} → {new_name}")
+                            renamed += 1
+                        else:
+                            st.warning(f"No match found in CSV for: {original_name}")
+                            skipped += 1
 
-                    if file_type != "All Files":
-                        extension = f".{file_type.lower()}"
-                        if not new_name.lower().endswith(extension):
-                            new_name += extension
-
-                    old_file_path = os.path.join(folder_path, old_name)
-                    new_file_path = os.path.join(folder_path, new_name)
-
-                    try:
-                        os.rename(old_file_path, new_file_path)
-                        st.success(f"Renamed: {old_name} -> {new_name}")
-                        renamed += 1
-                    except FileNotFoundError:
-                        st.warning(f"File not found: {old_name}")
-                        skipped += 1
-                    except Exception as e:
-                        st.error(f"Error renaming {old_name}: {e}")
-                        failed += 1
-
-                st.info(f"✅ Renamed: {renamed} | ⚠️ Skipped: {skipped} | ❌ Failed: {failed}")
+                memory_zip.seek(0)
+                st.download_button(
+                    label="📦 Download Renamed Files as ZIP",
+                    data=memory_zip,
+                    file_name="Renamed_Files.zip",
+                    mime="application/zip"
+                )
+                st.info(f"✅ Renamed: {renamed}, ⚠️ Skipped: {skipped}")
         except Exception as e:
-            st.error(f"Failed to process the file: {e}")
-
-st.write("File renaming completed.")
+            st.error(f"Error during processing: {e}")
